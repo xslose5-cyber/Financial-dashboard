@@ -175,6 +175,8 @@ tbody tr:hover { background: var(--surface-hover); }
 }
 .dd-amount { margin-left: auto; font-weight: 600; }
 .dd-empty { font-size: 12px; color: var(--text-3); padding: 8px 0; }
+.inline-day-detail td { padding: 0 !important; }
+.inline-day-detail:hover { background: transparent !important; }
 
 /* Transactions */
 .tx-list { display: flex; flex-direction: column; gap: 4px; max-height: 400px; overflow-y: auto; }
@@ -213,6 +215,14 @@ tbody tr:hover { background: var(--surface-hover); }
 .tx-type.in { background: var(--green-bg); color: var(--green); }
 .tx-type.out { background: var(--red-bg); color: var(--red); }
 .tx-amount { text-align: right; font-weight: 600; }
+
+/* Settlement */
+.settle-status {
+  font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; cursor: pointer;
+}
+.settle-status.pending { background: var(--amber-bg); color: var(--amber); }
+.settle-status.completed { background: var(--green-bg); color: var(--green); }
+.settle-status.overdue { background: var(--red-bg); color: var(--red); }
 
 /* Modal */
 .modal-overlay {
@@ -433,7 +443,7 @@ tbody tr:hover { background: var(--surface-hover); }
   <!-- Charts -->
   <div class="charts-row">
     <div class="card">
-      <div class="card-title">잔액 추이 (최근 40일)</div>
+      <div class="card-title">잔액 추이 (오늘 기준 최근 40일)</div>
       <div class="chart-box"><canvas id="balanceChart"></canvas></div>
     </div>
     <div class="card">
@@ -466,8 +476,6 @@ tbody tr:hover { background: var(--surface-hover); }
         </table>
       </div>
     </div>
-    <!-- Day Detail Panel (shown below table when date clicked) -->
-    <div class="day-detail" id="dayDetail"></div>
   </div>
 
   <!-- Transactions -->
@@ -484,6 +492,24 @@ tbody tr:hover { background: var(--surface-hover); }
       </div>
     </div>
     <div class="tx-list" id="txList"></div>
+  </div>
+
+  <!-- Settlement Schedule (정산 예정) -->
+  <div class="card" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div class="card-title" style="margin-bottom:0">정산 예정</div>
+      <div style="display:flex;gap:4px;align-items:center">
+        <div style="display:flex;gap:4px" id="settleFilters">
+          <button class="tab active" data-sfilter="pending" style="font-size:11px;padding:5px 12px">대기 중</button>
+          <button class="tab" data-sfilter="completed" style="font-size:11px;padding:5px 12px">완료</button>
+          <button class="tab" data-sfilter="all" style="font-size:11px;padding:5px 12px">전체</button>
+        </div>
+        <button class="btn" onclick="openSettleModal()" style="margin-left:4px">+ 정산 추가</button>
+      </div>
+    </div>
+    <div id="settleList" class="tx-list"></div>
+    <div id="settleEmpty" style="font-size:12px;color:var(--text-3);padding:10px 0;text-align:center">등록된 정산 예정이 없습니다.</div>
+    <div id="settleSummary" style="margin-top:10px;padding:10px;background:var(--surface-alt);border-radius:var(--radius-sm);font-size:12px;display:none"></div>
   </div>
 
   <!-- Recurring Expenses -->
@@ -532,8 +558,9 @@ tbody tr:hover { background: var(--surface-hover); }
       <input type="text" id="fAmount" placeholder="1,000,000" inputmode="numeric">
     </div>
     <div class="form-group">
-      <label>적요</label>
-      <input type="text" id="fDesc" placeholder="거래 내용을 입력하세요">
+      <label>적요 <button type="button" onclick="openDescManager()" style="font-size:9px;color:var(--blue);background:none;border:none;cursor:pointer;font-family:inherit;padding:0;margin-left:4px">목록 관리</button></label>
+      <input type="text" id="fDesc" list="descList" placeholder="선택하거나 직접 입력" autocomplete="off">
+      <datalist id="descList"></datalist>
     </div>
     <div class="form-group">
       <label>관련 프로젝트 (선택)</label>
@@ -594,6 +621,82 @@ tbody tr:hover { background: var(--surface-hover); }
       <div style="display:flex;gap:8px;margin-left:auto">
         <button class="btn" onclick="closeModal('recModalOverlay')">취소</button>
         <button class="btn btn-primary" onclick="saveRecurring()">저장</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Description Manager Modal -->
+<div class="modal-overlay" id="descManagerOverlay">
+  <div class="modal">
+    <h2>📝 적요 목록 관리</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>새 적요 추가</label>
+        <input type="text" id="newDescInput" placeholder="적요명 입력">
+      </div>
+      <div class="form-group">
+        <label>분류</label>
+        <select id="newDescType">
+          <option value="in">입금</option>
+          <option value="out">출금</option>
+          <option value="both">공통</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="addDescItem()" style="margin-bottom:14px;width:100%">추가</button>
+    <div style="max-height:300px;overflow-y:auto" id="descManagerList"></div>
+    <div class="btn-row">
+      <button class="btn" onclick="closeModal('descManagerOverlay')">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settlement Modal -->
+<div class="modal-overlay" id="settleModalOverlay">
+  <div class="modal">
+    <h2 id="settleModalTitle">📋 정산 예정 추가</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>정산 예정일</label>
+        <input type="date" id="stDate">
+      </div>
+      <div class="form-group">
+        <label>유형</label>
+        <select id="stType"><option value="in">입금 (받을 금액)</option><option value="out">출금 (보낼 금액)</option></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>회사</label>
+        <select id="stCompany"><option value="personal">개인회사</option><option value="corp">법인회사</option></select>
+      </div>
+      <div class="form-group">
+        <label>계좌</label>
+        <select id="stAccount"><option value="account1">계좌 1</option><option value="account2">계좌 2</option></select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>금액 (원)</label>
+      <input type="text" id="stAmount" placeholder="1,000,000" inputmode="numeric">
+    </div>
+    <div class="form-group">
+      <label>거래처 / 내용</label>
+      <input type="text" id="stDesc" placeholder="거래처명 또는 정산 내용">
+    </div>
+    <div class="form-group">
+      <label>관련 프로젝트 (선택)</label>
+      <input type="text" id="stProject" placeholder="프로젝트명">
+    </div>
+    <div class="form-group">
+      <label>메모 (선택)</label>
+      <input type="text" id="stMemo" placeholder="참고사항">
+    </div>
+    <div class="btn-row" style="justify-content:space-between">
+      <button class="btn btn-danger" id="stDeleteBtn" onclick="deleteSettleFromModal()" style="display:none">삭제</button>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button class="btn" onclick="closeModal('settleModalOverlay')">취소</button>
+        <button class="btn btn-primary" onclick="saveSettle()">저장</button>
       </div>
     </div>
   </div>
@@ -660,7 +763,22 @@ const defaultSettings = {
   balanceYear: new Date().getFullYear()
 };
 
-let state = { transactions: [], recurring: [], settings: { ...defaultSettings } };
+let state = { transactions: [], recurring: [], settlements: [], descItems: [], settings: { ...defaultSettings } };
+
+const defaultDescItems = [
+  { name: '매출 입금', type: 'in' }, { name: '용역비 수령', type: 'in' },
+  { name: '프로젝트 대금', type: 'in' }, { name: '컨설팅 수수료', type: 'in' },
+  { name: '광고 수익', type: 'in' }, { name: '투자 수익', type: 'in' },
+  { name: '임대 수입', type: 'in' }, { name: '정산금', type: 'in' },
+  { name: '대출금 입금', type: 'in' }, { name: '환불금', type: 'in' },
+  { name: '사무실 임대료', type: 'out' }, { name: '인건비', type: 'out' },
+  { name: '서버 비용', type: 'out' }, { name: '마케팅비', type: 'out' },
+  { name: '세금 납부', type: 'out' }, { name: '보험료', type: 'out' },
+  { name: '소모품 구입', type: 'out' }, { name: '외주비', type: 'out' },
+  { name: '통신비', type: 'out' }, { name: '교통비', type: 'out' },
+  { name: '식대/복리후생', type: 'out' }, { name: '접대비', type: 'out' },
+  { name: '수수료', type: 'both' }, { name: '기타', type: 'both' }
+];
 let firestoreReady = false;
 
 function setSyncStatus(status, text) {
@@ -715,6 +833,18 @@ function deleteRecurring_db(id) {
   deleteFromFirestore('recurring', id);
 }
 
+function saveSettle_db(s) {
+  saveToFirestore('settlements', s.id, s);
+}
+
+function deleteSettle_db(id) {
+  deleteFromFirestore('settlements', id);
+}
+
+function saveDescItems_db() {
+  saveToFirestore('config', 'descItems', { items: state.descItems });
+}
+
 // Local cache for UI settings only
 function saveLocalUI() {
   localStorage.setItem(LOCAL_KEY, JSON.stringify({
@@ -755,6 +885,17 @@ function startListeners() {
     setSyncStatus('offline', '오프라인');
   });
 
+  // DescItems listener
+  db.collection('config').doc('descItems').onSnapshot(doc => {
+    if (doc.exists && doc.data().items) {
+      state.descItems = doc.data().items;
+    } else {
+      state.descItems = [...defaultDescItems];
+      saveDescItems_db();
+    }
+    updateDescDatalist();
+  }, err => { console.error('Desc listener error:', err); });
+
   // Transactions listener
   db.collection('transactions').onSnapshot(snap => {
     state.transactions = [];
@@ -776,6 +917,18 @@ function startListeners() {
     if (firestoreReady) renderAll();
   }, err => {
     console.error('Recurring listener error:', err);
+    setSyncStatus('offline', '오프라인');
+  });
+
+  // Settlements listener
+  db.collection('settlements').onSnapshot(snap => {
+    state.settlements = [];
+    snap.forEach(doc => {
+      state.settlements.push({ ...doc.data(), id: doc.id });
+    });
+    if (firestoreReady) renderAll();
+  }, err => {
+    console.error('Settlements listener error:', err);
     setSyncStatus('offline', '오프라인');
   });
 }
@@ -981,6 +1134,7 @@ function renderAll() {
   renderCharts(balances);
   renderBalanceTable(balances);
   renderTransactions();
+  renderSettlements();
   renderRecurring();
 }
 
@@ -988,10 +1142,18 @@ function renderSummary(balances, latest) {
   const c = state.settings.currentCompany;
   let totalBal = c === 'all' ? latest.total : c === 'personal' ? latest.personalBal : latest.corpBal;
 
+  // Today's balance
+  const todayStr = ds(new Date());
+  const todayData = balances.find(b => b.date === todayStr);
+  let todayPersonal = todayData ? todayData.personalBal : state.settings.personalCapital;
+  let todayCorp = todayData ? todayData.corpBal : state.settings.corpCapital;
+  let todayTotal = todayPersonal + todayCorp;
+  if (c === 'personal') todayTotal = todayPersonal;
+  else if (c === 'corp') todayTotal = todayCorp;
+
   const thisMonth = ds(new Date()).slice(0,7);
   const ft = filteredTx();
   const monthTx = ft.filter(t => t.date.startsWith(thisMonth));
-  // Include recurring in month calculations
   const now = new Date();
   const maxDay = now.getDate();
   let recIn = 0, recOut = 0;
@@ -1007,13 +1169,13 @@ function renderSummary(balances, latest) {
   const monthOut = monthTx.filter(t => t.type === 'out').reduce((s,t) => s+t.amount, 0) + recOut;
   const net = monthIn - monthOut;
 
-  const isNeg = totalBal < 0;
+  const isNeg = todayTotal < 0;
 
   document.getElementById('summaryCards').innerHTML = `
     <div class="card summary-card">
-      <div class="label">총 잔액</div>
-      <div class="value mono ${isNeg ? 'negative-bal' : ''}">${isNeg ? '' : ''}${fmt(totalBal)}</div>
-      <div class="sub-info">${isNeg ? '⚠ 잔액 부족' : '원'}</div>
+      <div class="label">오늘 잔액 (${todayStr.slice(5)})</div>
+      <div class="value mono ${isNeg ? 'negative-bal' : ''}">${fmt(todayTotal)}</div>
+      <div class="sub-info">${c==='all' ? `개인 ${fmtShort(todayPersonal)} · 법인 ${fmtShort(todayCorp)}` : '원'}</div>
     </div>
     <div class="card summary-card">
       <div class="label">이번달 입금</div>
@@ -1033,7 +1195,17 @@ function renderSummary(balances, latest) {
 }
 
 function renderCharts(balances) {
-  const last40 = balances.slice(-40);
+  // Get 40 days ending at today (not end of year data)
+  const todayStr = ds(new Date());
+  const todayIdx = balances.findIndex(b => b.date === todayStr);
+  let last40;
+  if (todayIdx >= 0) {
+    const start = Math.max(0, todayIdx - 39);
+    last40 = balances.slice(start, todayIdx + 1);
+  } else {
+    // If today not in this year's data, fall back to last 40
+    last40 = balances.slice(-40);
+  }
   const ctx1 = document.getElementById('balanceChart').getContext('2d');
   if (balChart) balChart.destroy();
 
@@ -1134,10 +1306,9 @@ function renderBalanceTable(balances) {
     const isNegP = d.personalBal < 0;
     const isNegC = d.corpBal < 0;
     const isNegT = d.total < 0;
-    const sel = selectedDate === d.date ? 'background:var(--amber-bg);' : '';
     const futureClass = isFuture ? 'future-row' : '';
 
-    html += `<tr class="${isToday ? 'today-row' : ''} ${futureClass}" style="${sel}" data-date="${d.date}" onclick="toggleDayDetail('${d.date}')">
+    html += `<tr class="${isToday ? 'today-row' : ''} ${futureClass}" data-date="${d.date}" onclick="toggleDayDetail('${d.date}')">
       <td><span class="${dayClass}">${d.date.slice(5)} (${dl})</span>${isToday ? ' <span style="font-size:9px;color:var(--blue);font-weight:700">오늘</span>' : ''}${isFuture && d.txCount ? ' <span class="future-tag">예정</span>' : ''}${d.txCount ? ` <span style="font-size:9px;color:var(--text-3)">${d.txCount}건</span>` : ''}</td>
       <td class="in-val mono">${d.dayIn ? '+'+fmt(d.dayIn) : '<span style="color:var(--text-3)">-</span>'}</td>
       <td class="out-val mono">${d.dayOut ? '-'+fmt(d.dayOut) : '<span style="color:var(--text-3)">-</span>'}</td>
@@ -1151,18 +1322,26 @@ function renderBalanceTable(balances) {
 }
 
 function toggleDayDetail(dateStr) {
-  const panel = document.getElementById('dayDetail');
+  // Remove any existing inline detail
+  document.querySelectorAll('.inline-day-detail').forEach(el => el.remove());
+
   if (selectedDate === dateStr) {
     selectedDate = null;
-    panel.classList.remove('active');
-    renderAll();
+    // Remove highlight
+    document.querySelectorAll('tr[data-date]').forEach(r => r.style.background = '');
     return;
   }
   selectedDate = dateStr;
+
+  // Highlight selected row and remove others
+  document.querySelectorAll('tr[data-date]').forEach(r => {
+    r.style.background = r.dataset.date === dateStr ? 'var(--amber-bg)' : '';
+  });
+
   const txs = getAllTxForDate(dateStr);
   const dl = dayLabel(dateStr);
 
-  let inner = `<div style="font-size:13px;font-weight:700;margin-bottom:10px">📅 ${dateStr} (${dl}) 거래 내역</div>`;
+  let inner = `<div style="font-size:12px;font-weight:700;margin-bottom:8px">📅 ${dateStr} (${dl}) 거래 내역</div>`;
   if (txs.length === 0) {
     inner += `<div class="dd-empty">거래 내역이 없습니다.</div>`;
   } else {
@@ -1184,12 +1363,19 @@ function toggleDayDetail(dateStr) {
       </div>`;
     });
   }
-  panel.innerHTML = inner;
-  panel.classList.add('active');
-  renderAll();
-  // Re-show panel after renderAll
-  document.getElementById('dayDetail').innerHTML = inner;
-  document.getElementById('dayDetail').classList.add('active');
+
+  // Find the clicked row and insert detail row right after it
+  const clickedRow = document.querySelector(`tr[data-date="${dateStr}"]`);
+  if (clickedRow) {
+    const detailRow = document.createElement('tr');
+    detailRow.className = 'inline-day-detail';
+    detailRow.innerHTML = `<td colspan="6" style="padding:0;border-bottom:1px solid var(--border)">
+      <div style="padding:12px 14px;background:var(--surface-alt);border-left:3px solid var(--blue);animation:slideDown 0.15s ease">${inner}</div>
+    </td>`;
+    clickedRow.after(detailRow);
+    // Scroll into view
+    detailRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
 function renderTransactions() {
@@ -1240,6 +1426,219 @@ function renderRecurring() {
 }
 
 // ═══════════════════════════════════════════
+// SETTLEMENTS (정산 예정)
+// ═══════════════════════════════════════════
+let settleFilter = 'pending';
+
+function renderSettlements() {
+  const todayStr = ds(new Date());
+  let list = state.settlements || [];
+
+  // Filter
+  if (settleFilter === 'pending') list = list.filter(s => s.status !== 'completed');
+  else if (settleFilter === 'completed') list = list.filter(s => s.status === 'completed');
+
+  // Sort: pending by date asc, completed by date desc
+  list = list.sort((a,b) => {
+    if (settleFilter === 'completed') return b.date.localeCompare(a.date);
+    return a.date.localeCompare(b.date);
+  });
+
+  const emptyEl = document.getElementById('settleEmpty');
+  const summaryEl = document.getElementById('settleSummary');
+  emptyEl.style.display = list.length ? 'none' : 'block';
+
+  // Summary for pending
+  const pending = (state.settlements || []).filter(s => s.status !== 'completed');
+  const pendingIn = pending.filter(s => s.type === 'in').reduce((s,x) => s + x.amount, 0);
+  const pendingOut = pending.filter(s => s.type === 'out').reduce((s,x) => s + x.amount, 0);
+  if (pending.length > 0) {
+    summaryEl.style.display = 'block';
+    summaryEl.innerHTML = `<span style="font-weight:600">대기 중 요약:</span>
+      <span class="mono in-val" style="margin-left:10px">받을 금액 +${fmt(pendingIn)}</span>
+      <span class="mono out-val" style="margin-left:10px">보낼 금액 -${fmt(pendingOut)}</span>
+      <span class="mono" style="margin-left:10px;font-weight:700;color:${pendingIn-pendingOut>=0?'var(--green)':'var(--red)'}">순 ${pendingIn-pendingOut>=0?'+':''}${fmt(pendingIn-pendingOut)}</span>`;
+  } else {
+    summaryEl.style.display = 'none';
+  }
+
+  document.getElementById('settleList').innerHTML = list.length ? list.map(s => {
+    const isOverdue = s.status !== 'completed' && s.date < todayStr;
+    const statusClass = s.status === 'completed' ? 'completed' : isOverdue ? 'overdue' : 'pending';
+    const statusText = s.status === 'completed' ? '완료' : isOverdue ? '지연' : '대기';
+    const daysLeft = s.status !== 'completed' ? Math.ceil((new Date(s.date) - new Date()) / 86400000) : null;
+    const daysText = daysLeft !== null ? (daysLeft === 0 ? '오늘' : daysLeft > 0 ? `D-${daysLeft}` : `${Math.abs(daysLeft)}일 지연`) : '';
+
+    return `<div class="tx-item" style="${s.status==='completed'?'opacity:0.5':''}">
+      <div class="tx-date">${s.date.slice(5)} (${dayLabel(s.date)})${daysText ? `<div style="font-size:9px;font-weight:600;color:${isOverdue?'var(--red)':'var(--blue)'};margin-top:1px">${daysText}</div>` : ''}</div>
+      <div>
+        <span class="tx-desc">${s.desc}</span>
+        ${s.project ? `<span class="tx-project">${s.project}</span>` : ''}
+        ${s.memo ? `<div style="font-size:10px;color:var(--text-3);margin-top:1px">${s.memo}</div>` : ''}
+        <div style="font-size:10px;color:var(--text-3);margin-top:1px">${s.company==='personal'?'개인':'법인'} · ${s.account==='account1'?'계좌1':'계좌2'}</div>
+      </div>
+      <div>
+        <span class="settle-status ${statusClass}" onclick="event.stopPropagation();toggleSettleStatus('${s.id}')" title="클릭하여 상태 변경">${statusText}</span>
+      </div>
+      <div class="tx-amount mono" style="color:${s.type==='in'?'var(--green)':'var(--red)'}">${s.type==='in'?'+':'-'}${fmt(s.amount)}</div>
+      <div class="tx-actions">
+        <button class="tx-act-btn" onclick="event.stopPropagation();openEditSettleModal('${s.id}')" title="수정">✎</button>
+        <button class="tx-act-btn del" onclick="event.stopPropagation();deleteSettle('${s.id}')" title="삭제">✕</button>
+      </div>
+    </div>`;
+  }).join('') : '';
+}
+
+function toggleSettleStatus(id) {
+  const s = state.settlements.find(x => x.id === id);
+  if (!s) return;
+  if (s.status === 'completed') {
+    s.status = 'pending';
+  } else {
+    s.status = 'completed';
+    s.completedDate = ds(new Date());
+    // Optionally auto-create transaction when completed
+    if (confirm('정산 완료 처리합니다. 거래 내역에도 자동 등록할까요?')) {
+      const tx = {
+        id: uid(), date: ds(new Date()), type: s.type,
+        company: s.company, account: s.account,
+        amount: s.amount, desc: `[정산] ${s.desc}`,
+        project: s.project || '', isRecurring: false
+      };
+      state.transactions.push(tx);
+      saveTx_db(tx);
+    }
+  }
+  saveSettle_db(s);
+  renderAll();
+}
+
+let editingSettleId = null;
+
+function openSettleModal() {
+  editingSettleId = null;
+  document.getElementById('settleModalTitle').textContent = '📋 정산 예정 추가';
+  document.getElementById('stDeleteBtn').style.display = 'none';
+  document.getElementById('stDate').value = ds(new Date());
+  document.getElementById('stType').value = 'in';
+  document.getElementById('stCompany').value = 'personal';
+  document.getElementById('stAccount').value = 'account1';
+  document.getElementById('stAmount').value = '';
+  document.getElementById('stDesc').value = '';
+  document.getElementById('stProject').value = '';
+  document.getElementById('stMemo').value = '';
+  document.getElementById('settleModalOverlay').classList.add('active');
+}
+
+function openEditSettleModal(id) {
+  const s = state.settlements.find(x => x.id === id);
+  if (!s) return;
+  editingSettleId = id;
+  document.getElementById('settleModalTitle').textContent = '✏️ 정산 예정 수정';
+  document.getElementById('stDeleteBtn').style.display = 'inline-flex';
+  document.getElementById('stDate').value = s.date;
+  document.getElementById('stType').value = s.type;
+  document.getElementById('stCompany').value = s.company;
+  document.getElementById('stAccount').value = s.account;
+  document.getElementById('stAmount').value = fmt(s.amount);
+  document.getElementById('stDesc').value = s.desc;
+  document.getElementById('stProject').value = s.project || '';
+  document.getElementById('stMemo').value = s.memo || '';
+  document.getElementById('settleModalOverlay').classList.add('active');
+}
+
+function saveSettle() {
+  const date = document.getElementById('stDate').value;
+  const type = document.getElementById('stType').value;
+  const company = document.getElementById('stCompany').value;
+  const account = document.getElementById('stAccount').value;
+  const raw = document.getElementById('stAmount').value.replace(/[^\d]/g, '');
+  const desc = document.getElementById('stDesc').value.trim();
+  const project = document.getElementById('stProject').value.trim();
+  const memo = document.getElementById('stMemo').value.trim();
+  if (!date || !raw || !desc) { alert('예정일, 금액, 내용을 입력해주세요.'); return; }
+
+  if (editingSettleId) {
+    const idx = state.settlements.findIndex(x => x.id === editingSettleId);
+    if (idx !== -1) {
+      const updated = { ...state.settlements[idx], date, type, company, account, amount: parseInt(raw), desc, project, memo };
+      state.settlements[idx] = updated;
+      saveSettle_db(updated);
+    }
+  } else {
+    const s = { id: uid(), date, type, company, account, amount: parseInt(raw), desc, project, memo, status: 'pending' };
+    state.settlements.push(s);
+    saveSettle_db(s);
+  }
+  editingSettleId = null;
+  closeModal('settleModalOverlay'); renderAll();
+}
+
+function deleteSettle(id) {
+  if (!confirm('이 정산 예정을 삭제하시겠습니까?')) return;
+  state.settlements = state.settlements.filter(s => s.id !== id);
+  deleteSettle_db(id);
+  renderAll();
+}
+
+function deleteSettleFromModal() {
+  if (!editingSettleId) return;
+  if (!confirm('이 정산 예정을 삭제하시겠습니까?')) return;
+  const id = editingSettleId;
+  state.settlements = state.settlements.filter(s => s.id !== id);
+  deleteSettle_db(id);
+  editingSettleId = null;
+  closeModal('settleModalOverlay'); renderAll();
+}
+
+// ═══════════════════════════════════════════
+// DESC ITEMS MANAGEMENT
+// ═══════════════════════════════════════════
+function updateDescDatalist() {
+  const dl = document.getElementById('descList');
+  if (!dl) return;
+  const type = document.getElementById('fType') ? document.getElementById('fType').value : 'both';
+  const items = state.descItems.filter(d => d.type === type || d.type === 'both');
+  dl.innerHTML = items.map(d => `<option value="${d.name}">`).join('');
+}
+
+function openDescManager() {
+  renderDescManagerList();
+  document.getElementById('descManagerOverlay').classList.add('active');
+}
+
+function renderDescManagerList() {
+  const list = state.descItems || [];
+  const typeLabel = { in: '입금', out: '출금', both: '공통' };
+  const typeColor = { in: 'var(--green)', out: 'var(--red)', both: 'var(--blue)' };
+  document.getElementById('descManagerList').innerHTML = list.map((d, i) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:12px">
+      <span style="flex:1;font-weight:500">${d.name}</span>
+      <span style="font-size:10px;color:${typeColor[d.type]};font-weight:600">${typeLabel[d.type]}</span>
+      <span onclick="removeDescItem(${i})" style="cursor:pointer;color:var(--text-3);font-size:14px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:4px" onmouseover="this.style.background='var(--red-bg)';this.style.color='var(--red)'" onmouseout="this.style.background='';this.style.color='var(--text-3)'">✕</span>
+    </div>`).join('');
+}
+
+function addDescItem() {
+  const name = document.getElementById('newDescInput').value.trim();
+  const type = document.getElementById('newDescType').value;
+  if (!name) { alert('적요명을 입력해주세요.'); return; }
+  if (state.descItems.some(d => d.name === name)) { alert('이미 존재하는 적요입니다.'); return; }
+  state.descItems.push({ name, type });
+  saveDescItems_db();
+  document.getElementById('newDescInput').value = '';
+  renderDescManagerList();
+  updateDescDatalist();
+}
+
+function removeDescItem(idx) {
+  state.descItems.splice(idx, 1);
+  saveDescItems_db();
+  renderDescManagerList();
+  updateDescDatalist();
+}
+
+// ═══════════════════════════════════════════
 // EVENTS
 // ═══════════════════════════════════════════
 document.getElementById('companyTabs').addEventListener('click', e => {
@@ -1257,6 +1656,14 @@ document.getElementById('txFilters').addEventListener('click', e => {
   tab.classList.add('active');
   state.settings.txFilter = tab.dataset.txfilter;
   renderTransactions();
+});
+document.getElementById('settleFilters').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  document.querySelectorAll('#settleFilters .tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  settleFilter = tab.dataset.sfilter;
+  renderSettlements();
 });
 
 function changeBalanceYear(delta) {
@@ -1281,6 +1688,7 @@ function bindAmountFmt(id) {
 }
 bindAmountFmt('fAmount');
 bindAmountFmt('rAmount');
+bindAmountFmt('stAmount');
 bindAmountFmt('sPersonal');
 bindAmountFmt('sCorp');
 
@@ -1289,6 +1697,9 @@ bindAmountFmt('sCorp');
   const sel = document.getElementById('rDay');
   for (let i = 1; i <= 31; i++) sel.innerHTML += `<option value="${i}">${i}일</option>`;
 })();
+
+// Update desc datalist when type changes
+document.getElementById('fType').addEventListener('change', updateDescDatalist);
 
 // ═══════════════════════════════════════════
 // MODALS
@@ -1472,14 +1883,14 @@ async function resetAllData() {
   if (!confirm('정말로 전체 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.')) return;
   setSyncStatus('syncing', '초기화 중...');
   // Delete all documents
-  const collections = ['transactions', 'recurring', 'config'];
+  const collections = ['transactions', 'recurring', 'settlements', 'config'];
   for (const col of collections) {
     const snap = await db.collection(col).get();
     const batch = db.batch();
     snap.forEach(doc => batch.delete(doc.ref));
     await batch.commit();
   }
-  state = { transactions: [], recurring: [], settings: { ...defaultSettings } };
+  state = { transactions: [], recurring: [], settlements: [], descItems: [...defaultDescItems], settings: { ...defaultSettings } };
   localStorage.removeItem(LOCAL_KEY);
   selectedDate = null;
   setSyncStatus('online', '초기화 완료');
