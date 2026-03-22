@@ -120,17 +120,20 @@ body {
 .balance-scroll-area {
   max-height: 1520px; /* ~40 rows visible */
   overflow-y: auto;
+  position: relative;
 }
 .balance-scroll-area::-webkit-scrollbar { width: 5px; }
 .balance-scroll-area::-webkit-scrollbar-track { background: transparent; }
 .balance-scroll-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-thead { position: sticky; top: 0; z-index: 2; }
+table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+thead { position: sticky; top: 0; z-index: 3; }
 thead th {
-  background: var(--surface-alt); padding: 9px 12px; text-align: left;
+  background: var(--surface); padding: 9px 12px; text-align: left;
   font-weight: 700; font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.4px; color: var(--text-3); border-bottom: 1px solid var(--border);
+  letter-spacing: 0.4px; color: var(--text-3);
+  border-bottom: 2px solid var(--border);
+  box-shadow: 0 1px 0 var(--border);
 }
 thead th:nth-child(n+2) { text-align: right; }
 tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border-light); font-variant-numeric: tabular-nums; }
@@ -339,7 +342,7 @@ tbody tr:hover { background: var(--surface-hover); }
   .balance-scroll-area { max-height: 600px; overflow: auto; -webkit-overflow-scrolling: touch; }
   .balance-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { min-width: 580px; font-size: 11px; }
-  thead th { padding: 7px 8px; font-size: 9px; white-space: nowrap; }
+  thead th { padding: 7px 8px; font-size: 9px; white-space: nowrap; background: var(--surface); }
   tbody td { padding: 7px 8px; white-space: nowrap; }
   .month-sep td { padding: 6px 8px; font-size: 10px; }
   .today-row td:first-child span[style*="font-size:9px"] { font-size: 8px !important; }
@@ -482,8 +485,10 @@ tbody tr:hover { background: var(--surface-hover); }
   <div class="card" style="margin-bottom:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <div class="card-title" style="margin-bottom:0">거래 내역</div>
-      <div style="display:flex;gap:4px;align-items:center">
-        <button class="btn" onclick="exportTxExcel()" title="엑셀 다운로드" style="margin-right:4px">📥 거래 내역</button>
+      <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+        <button class="btn" onclick="exportTxExcel()" title="엑셀 다운로드">📥 내보내기</button>
+        <button class="btn" onclick="document.getElementById('uploadExcelInput').click()" title="엑셀 업로드">📤 가져오기</button>
+        <input type="file" id="uploadExcelInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="importTxExcel(event)">
         <div style="display:flex;gap:4px" id="txFilters">
           <button class="tab active" data-txfilter="all" style="font-size:11px;padding:5px 12px">전체</button>
           <button class="tab" data-txfilter="in" style="font-size:11px;padding:5px 12px">입금</button>
@@ -2005,6 +2010,129 @@ function exportTxExcel() {
   const companyLabel = state.settings.currentCompany === 'all' ? '전체' :
     state.settings.currentCompany === 'personal' ? '개인' : '법인';
   XLSX.writeFile(wb, `거래내역_${companyLabel}_${filterLabel}_${today}.xlsx`);
+}
+
+function importTxExcel(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = ''; // reset for re-upload
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws);
+
+      if (rows.length === 0) { alert('파일에 데이터가 없습니다.'); return; }
+
+      // Auto-detect column mapping
+      const sample = rows[0];
+      const keys = Object.keys(sample);
+
+      // Try to find columns by known names
+      const findCol = (candidates) => keys.find(k => candidates.some(c => k.includes(c))) || null;
+      const dateCol = findCol(['날짜', 'date', 'Date', '일자', '거래일']);
+      const typeCol = findCol(['유형', 'type', 'Type', '구분', '입출금']);
+      const companyCol = findCol(['회사', 'company', 'Company']);
+      const accountCol = findCol(['계좌', 'account', 'Account']);
+      const amountCol = findCol(['금액', 'amount', 'Amount', '거래금액']);
+      const descCol = findCol(['적요', 'desc', '내용', '거래내용', '메모', '비고', '적요내용']);
+      const projectCol = findCol(['프로젝트', 'project', 'Project']);
+
+      if (!dateCol || !amountCol) {
+        alert(`필수 열을 찾을 수 없습니다.\n\n파일에 최소한 '날짜'와 '금액' 열이 필요합니다.\n\n감지된 열: ${keys.join(', ')}\n\n엑셀 양식: 날짜, 유형(입금/출금), 회사(개인회사/법인회사), 계좌(계좌 1/계좌 2), 금액, 적요, 프로젝트`);
+        return;
+      }
+
+      const newTxs = [];
+      let skipped = 0;
+
+      rows.forEach(row => {
+        const rawDate = row[dateCol];
+        let date = '';
+        if (typeof rawDate === 'number') {
+          // Excel serial date
+          const d = new Date((rawDate - 25569) * 86400000);
+          date = ds(d);
+        } else if (typeof rawDate === 'string') {
+          // Try parsing various formats
+          const cleaned = rawDate.replace(/\./g, '-').replace(/\//g, '-').trim();
+          const parsed = new Date(cleaned);
+          if (!isNaN(parsed)) date = ds(parsed);
+        }
+        if (!date) { skipped++; return; }
+
+        const rawAmount = row[amountCol];
+        const amount = Math.abs(typeof rawAmount === 'number' ? rawAmount : parseInt(String(rawAmount).replace(/[^\d-]/g, '')) || 0);
+        if (!amount) { skipped++; return; }
+
+        // Detect type
+        let type = 'out';
+        if (typeCol && row[typeCol]) {
+          const tv = String(row[typeCol]).trim();
+          if (tv.includes('입금') || tv.includes('in') || tv === '입') type = 'in';
+        } else if (typeof rawAmount === 'number' && rawAmount > 0) {
+          type = 'in';
+        }
+
+        // Detect company
+        let company = 'personal';
+        if (companyCol && row[companyCol]) {
+          const cv = String(row[companyCol]).trim();
+          if (cv.includes('법인') || cv.includes('corp')) company = 'corp';
+        }
+
+        // Detect account
+        let account = 'account1';
+        if (accountCol && row[accountCol]) {
+          const av = String(row[accountCol]).trim();
+          if (av.includes('2')) account = 'account2';
+        }
+
+        const desc = descCol && row[descCol] ? String(row[descCol]).trim() : '엑셀 업로드';
+        const project = projectCol && row[projectCol] ? String(row[projectCol]).trim() : '';
+
+        newTxs.push({
+          id: uid(), date, type, company, account, amount, desc, project, isRecurring: false
+        });
+      });
+
+      if (newTxs.length === 0) {
+        alert('가져올 수 있는 거래가 없습니다.');
+        return;
+      }
+
+      const msg = `${newTxs.length}건의 거래를 가져옵니다.${skipped ? ` (${skipped}건 건너뜀)` : ''}\n\n계속하시겠습니까?`;
+      if (!confirm(msg)) return;
+
+      // Save to Firebase in batches
+      setSyncStatus('syncing', '업로드 중...');
+      const batchSize = 450;
+      const batches = [];
+      for (let i = 0; i < newTxs.length; i += batchSize) {
+        batches.push(newTxs.slice(i, i + batchSize));
+      }
+
+      (async () => {
+        for (const chunk of batches) {
+          const batch = db.batch();
+          chunk.forEach(tx => {
+            batch.set(db.collection('transactions').doc(tx.id), tx);
+          });
+          await batch.commit();
+        }
+        setSyncStatus('online', `${newTxs.length}건 업로드 완료`);
+        alert(`${newTxs.length}건의 거래를 성공적으로 가져왔습니다.`);
+      })();
+
+    } catch(err) {
+      console.error('Import error:', err);
+      alert('파일을 읽는 중 오류가 발생했습니다.\n\n지원 형식: .xlsx, .xls, .csv');
+    }
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 // ═══════════════════════════════════════════
