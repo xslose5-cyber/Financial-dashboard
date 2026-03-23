@@ -517,6 +517,43 @@ tbody tr:hover { background: var(--surface-hover); }
     <div id="settleSummary" style="margin-top:10px;padding:10px;background:var(--surface-alt);border-radius:var(--radius-sm);font-size:12px;display:none"></div>
   </div>
 
+  <!-- Project View (프로젝트별 조회) -->
+  <div class="card" style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div class="card-title" style="margin-bottom:0">프로젝트별 조회</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select id="projectSelect" onchange="renderProjectView()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:inherit;background:var(--surface);min-width:140px">
+          <option value="">프로젝트 선택</option>
+        </select>
+        <button class="btn" onclick="exportProjectExcel()" id="projectExportBtn" style="display:none">📥 내보내기</button>
+      </div>
+    </div>
+    <!-- Project Summary -->
+    <div id="projectSummary" style="display:none;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        <div style="padding:12px;background:var(--green-bg);border-radius:var(--radius-sm);text-align:center">
+          <div style="font-size:10px;color:var(--green);font-weight:600;margin-bottom:2px">총 입금</div>
+          <div class="mono" style="font-size:16px;font-weight:700;color:var(--green)" id="projTotalIn">0</div>
+        </div>
+        <div style="padding:12px;background:var(--red-bg);border-radius:var(--radius-sm);text-align:center">
+          <div style="font-size:10px;color:var(--red);font-weight:600;margin-bottom:2px">총 출금</div>
+          <div class="mono" style="font-size:16px;font-weight:700;color:var(--red)" id="projTotalOut">0</div>
+        </div>
+        <div style="padding:12px;background:var(--blue-bg);border-radius:var(--radius-sm);text-align:center">
+          <div style="font-size:10px;color:var(--blue);font-weight:600;margin-bottom:2px">순이익</div>
+          <div class="mono" style="font-size:16px;font-weight:700" id="projNet">0</div>
+        </div>
+      </div>
+    </div>
+    <!-- Project Chart -->
+    <div id="projectChartWrap" style="display:none;margin-bottom:12px;height:180px">
+      <canvas id="projectChart"></canvas>
+    </div>
+    <!-- Project Transaction List -->
+    <div class="tx-list" id="projectTxList" style="max-height:400px"></div>
+    <div id="projectEmpty" style="font-size:12px;color:var(--text-3);padding:16px 0;text-align:center">프로젝트를 선택하면 관련 입출금 내역이 표시됩니다.</div>
+  </div>
+
   <!-- Recurring Expenses -->
   <div class="card" style="margin-bottom:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -1141,6 +1178,8 @@ function renderAll() {
   renderTransactions();
   renderSettlements();
   renderRecurring();
+  updateProjectSelect();
+  renderProjectView();
 }
 
 function renderSummary(balances, latest) {
@@ -1594,6 +1633,139 @@ function deleteSettleFromModal() {
   deleteSettle_db(id);
   editingSettleId = null;
   closeModal('settleModalOverlay'); renderAll();
+}
+
+// ═══════════════════════════════════════════
+// PROJECT VIEW (프로젝트별 조회)
+// ═══════════════════════════════════════════
+let projChart;
+
+function updateProjectSelect() {
+  const projects = new Set();
+  state.transactions.forEach(t => { if (t.project) projects.add(t.project); });
+  (state.settlements || []).forEach(s => { if (s.project) projects.add(s.project); });
+  state.recurring.forEach(r => { if (r.project) projects.add(r.project); });
+
+  const sel = document.getElementById('projectSelect');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">프로젝트 선택</option>';
+  [...projects].sort().forEach(p => {
+    sel.innerHTML += `<option value="${p}" ${p === current ? 'selected' : ''}>${p}</option>`;
+  });
+}
+
+function renderProjectView() {
+  const proj = document.getElementById('projectSelect').value;
+  const summaryEl = document.getElementById('projectSummary');
+  const chartWrap = document.getElementById('projectChartWrap');
+  const listEl = document.getElementById('projectTxList');
+  const emptyEl = document.getElementById('projectEmpty');
+  const exportBtn = document.getElementById('projectExportBtn');
+
+  if (!proj) {
+    summaryEl.style.display = 'none';
+    chartWrap.style.display = 'none';
+    listEl.innerHTML = '';
+    emptyEl.style.display = 'block';
+    exportBtn.style.display = 'none';
+    return;
+  }
+
+  const txs = state.transactions.filter(t => t.project === proj)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const totalIn = txs.filter(t => t.type === 'in').reduce((s, t) => s + t.amount, 0);
+  const totalOut = txs.filter(t => t.type === 'out').reduce((s, t) => s + t.amount, 0);
+  const net = totalIn - totalOut;
+
+  // Summary
+  summaryEl.style.display = 'block';
+  exportBtn.style.display = 'inline-flex';
+  document.getElementById('projTotalIn').textContent = '+' + fmt(totalIn);
+  document.getElementById('projTotalOut').textContent = '-' + fmt(totalOut);
+  const netEl = document.getElementById('projNet');
+  netEl.textContent = (net >= 0 ? '+' : '') + fmt(net);
+  netEl.style.color = net >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // Chart — monthly in/out for this project
+  const monthMap = {};
+  txs.forEach(t => {
+    const m = t.date.slice(0, 7);
+    if (!monthMap[m]) monthMap[m] = { in: 0, out: 0 };
+    monthMap[m][t.type] += t.amount;
+  });
+  const months = Object.keys(monthMap).sort();
+
+  if (months.length > 1) {
+    chartWrap.style.display = 'block';
+    const ctx = document.getElementById('projectChart').getContext('2d');
+    if (projChart) projChart.destroy();
+    projChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: months.map(m => { const [y, mo] = m.split('-'); return `${parseInt(mo)}월`; }),
+        datasets: [
+          { label: '입금', data: months.map(m => monthMap[m].in), backgroundColor: 'rgba(37,99,235,0.7)', borderRadius: 4 },
+          { label: '출금', data: months.map(m => monthMap[m].out), backgroundColor: 'rgba(220,38,38,0.7)', borderRadius: 4 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: true, position: 'top', align: 'end',
+            labels: { boxWidth: 10, boxHeight: 10, font: { family: "'Noto Sans KR'", size: 10 }, padding: 12 } },
+          tooltip: { backgroundColor: '#1a1a1a', bodyFont: { family: "'JetBrains Mono'", size: 11 }, padding: 10, cornerRadius: 8,
+            callbacks: { label: ctx => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}원` } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { family: "'Noto Sans KR'", size: 10 } } },
+          y: { grid: { color: '#f0f0ec' }, ticks: { font: { family: "'JetBrains Mono'", size: 9 }, callback: v => fmtShort(v) }, border: { display: false } }
+        }
+      }
+    });
+  } else {
+    chartWrap.style.display = 'none';
+  }
+
+  // Transaction list
+  emptyEl.style.display = txs.length ? 'none' : 'block';
+  listEl.innerHTML = txs.map(t => `
+    <div class="tx-item">
+      <div class="tx-date">${t.date.slice(5)} (${dayLabel(t.date)})</div>
+      <div>
+        <span class="tx-desc">${t.desc}</span>
+        <div style="font-size:10px;color:var(--text-3);margin-top:1px">${t.company==='personal'?'개인':'법인'} · ${t.account==='account1'?'계좌1':'계좌2'}</div>
+      </div>
+      <div class="tx-type ${t.type}">${t.type==='in'?'입금':'출금'}</div>
+      <div class="tx-amount mono" style="color:${t.type==='in'?'var(--green)':'var(--red)'}">${t.type==='in'?'+':'-'}${fmt(t.amount)}</div>
+      <div class="tx-actions">
+        <button class="tx-act-btn" onclick="event.stopPropagation();openEditTxModal('${t.id}')" title="수정">✎</button>
+      </div>
+    </div>`).join('');
+}
+
+function exportProjectExcel() {
+  const proj = document.getElementById('projectSelect').value;
+  if (!proj) return;
+  const txs = state.transactions.filter(t => t.project === proj).sort((a, b) => a.date.localeCompare(b.date));
+  const rows = txs.map(t => ({
+    '날짜': t.date, '요일': dayLabel(t.date),
+    '유형': t.type === 'in' ? '입금' : '출금',
+    '회사': t.company === 'personal' ? '개인회사' : '법인회사',
+    '계좌': t.account === 'account1' ? '계좌 1' : '계좌 2',
+    '금액': t.amount, '적요': t.desc
+  }));
+  const totalIn = txs.filter(t => t.type === 'in').reduce((s, t) => s + t.amount, 0);
+  const totalOut = txs.filter(t => t.type === 'out').reduce((s, t) => s + t.amount, 0);
+  rows.push({});
+  rows.push({ '날짜': '합계', '유형': '입금', '금액': totalIn });
+  rows.push({ '날짜': '', '유형': '출금', '금액': totalOut });
+  rows.push({ '날짜': '', '유형': '순이익', '금액': totalIn - totalOut });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [{ wch: 12 }, { wch: 4 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 24 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, proj);
+  XLSX.writeFile(wb, `프로젝트_${proj}_${ds(new Date())}.xlsx`);
 }
 
 // ═══════════════════════════════════════════
